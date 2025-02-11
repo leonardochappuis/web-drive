@@ -31,17 +31,32 @@
       }
     }
     
-    // Update UI text based on token status.
+    // Update UI text and buttons based on token status.
     function updateTokenStatus(hasToken) {
       const tokenStatusEl = document.getElementById('tokenStatus');
+      const loginButton = document.getElementById('loginButton');
+      const logoutButton = document.getElementById('logoutButton');
+      const downloadButton = document.getElementById('downloadButton');
       if (hasToken) {
         tokenStatusEl.textContent = 'Access token is available.';
         tokenStatusEl.classList.remove('text-red-500');
         tokenStatusEl.classList.add('text-green-500');
+        // Show Logout, hide Sign In button
+        loginButton.classList.add('hidden');
+        logoutButton.classList.remove('hidden');
+        // Enable download button
+        downloadButton.disabled = false;
+        downloadButton.classList.remove('opacity-50', 'cursor-not-allowed');
       } else {
         tokenStatusEl.textContent = 'No access token. Please sign in.';
         tokenStatusEl.classList.remove('text-green-500');
         tokenStatusEl.classList.add('text-red-500');
+        // Show Sign In, hide Logout button
+        loginButton.classList.remove('hidden');
+        logoutButton.classList.add('hidden');
+        // Disable download button
+        downloadButton.disabled = true;
+        downloadButton.classList.add('opacity-50', 'cursor-not-allowed');
       }
     }
     
@@ -70,6 +85,14 @@
     // Request a token (will prompt the user only if necessary).
     function requestAccessToken() {
       tokenClient.requestAccessToken();
+    }
+    
+    // Logout function: Clear token and update UI.
+    function logout() {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('accessTokenExpiry');
+      accessToken = null;
+      updateTokenStatus(false);
     }
     
     // Extract the file ID from a Google Drive URL or use the input if it looks like an ID.
@@ -205,8 +228,7 @@
       });
       
       zip.generateAsync({ type: "blob" }, (metadata) => {
-        // metadata.percent ranges from 0 to 100 during the zipping process.
-        // Weight it for the remaining 50% (i.e. overall progress = 50% + (zipPercent/2)).
+        // Weight for zipping: overall progress = 50% + (zipPercent/2)
         let overallProgress = 50 + (metadata.percent * 0.5);
         progressMessage.textContent = `Zipping files: ${Math.floor(overallProgress)}% complete`;
         progressBar.style.width = overallProgress + '%';
@@ -233,6 +255,11 @@
     
     // Start the chosen download method.
     function startDownload() {
+      // Do not allow download if not logged in
+      if (!accessToken) {
+        alert("Please sign in first.");
+        return;
+      }
       const mode = document.querySelector('input[name="downloadMode"]:checked').value;
       if (mode === 'zip') {
         downloadFilesAsZip();
@@ -251,8 +278,12 @@
   <div class="container mx-auto p-6 max-w-2xl shadow-lg bg-white rounded-lg mt-10">
     <h1 class="text-3xl font-bold text-center mb-6">Download Multiple Google Drive Files</h1>
     <div class="mb-4 text-center">
-      <button onclick="requestAccessToken()" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded">
+      <!-- Login and Logout buttons -->
+      <button id="loginButton" onclick="requestAccessToken()" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded">
         Sign In &amp; Get Token
+      </button>
+      <button id="logoutButton" onclick="logout()" class="hidden bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-6 rounded">
+        Logout
       </button>
       <p id="tokenStatus" class="mt-2 text-sm"></p>
     </div>
@@ -281,7 +312,7 @@
       </div>
     </div>
     <div class="text-center">
-      <button onclick="startDownload()" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-6 rounded">
+      <button id="downloadButton" onclick="startDownload()" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-6 rounded">
         Download Files
       </button>
     </div>
