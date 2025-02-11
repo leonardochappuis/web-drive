@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Download Multiple Google Drive Files</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- New GIS library -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- JSZip library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+  <script>
+    const CLIENT_ID = '64041498478-3u1rbpadbj96og9emcbfe56018ner6hh.apps.googleusercontent.com';
+    const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
+    
+    let tokenClient;
+    let accessToken = null;
+    
+    // Check for a stored token in localStorage and verify if it hasn't expired.
+    function checkStoredToken() {
+      const storedToken = localStorage.getItem('accessToken');
+      const storedExpiry = localStorage.getItem('accessTokenExpiry');
+      if (storedToken && storedExpiry && Date.now() < parseInt(storedExpiry, 10)) {
+        accessToken = storedToken;
+        console.log('Using stored token:', accessToken);
+        updateTokenStatus(true);
+      } else {
+        console.log('No valid stored token found.');
+        updateTokenStatus(false);
+      }
+    }
+    
+    // Update UI text based on token status.
+    function updateTokenStatus(hasToken) {
+      const tokenStatusEl = document.getElementById('tokenStatus');
+      if (hasToken) {
+        tokenStatusEl.textContent = 'Access token is available.';
+        tokenStatusEl.classList.remove('text-red-500');
+        tokenStatusEl.classList.add('text-green-500');
+      } else {
+        tokenStatusEl.textContent = 'No access token. Please sign in.';
+        tokenStatusEl.classList.remove('text-green-500');
+        tokenStatusEl.classList.add('text-red-500');
+      }
+    }
+    
+    // Initialize the GIS token client.
+    function initTokenClient() {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: (response) => {
+          if (response.error) {
+            console.error('Error obtaining token:', response);
+            updateTokenStatus(false);
+            return;
+          }
+          accessToken = response.access_token;
+          // Store token and its expiry (response.expires_in is in seconds)
+          const expiryTime = Date.now() + (response.expires_in * 1000);
+          localStorage.setItem('accessToken', accessToken);
+          localStorage.setItem('accessTokenExpiry', expiryTime);
+          console.log('Access token acquired:', accessToken);
+          updateTokenStatus(true);
+        },
+      });
+    }
+    
+    // Request a token (will prompt the user only if necessary).
+    function requestAccessToken() {
+      tokenClient.requestAccessToken();
+    }
+    
+    // Extract the file ID from a Google Drive URL or use the input if it looks like an ID.
+    function extractFileId(url) {
+      let fileId = null;
+      const regex1 = /\/d\/([^\/]+)/;  // e.g., .../d/FILE_ID/...
+      const regex2 = /[?&]id=([^&]+)/;  // e.g., ...?id=FILE_ID
+      let match = url.match(regex1);
+      if (match && match[1]) {
+        fileId = match[1];
+      } else {
+        match = url.match(regex2);
+        if (match && match[1]) {
+          fileId = match[1];
+        }
+      }
+      if (!fileId && url.match(/^[a-zA-Z0-9_-]+$/)) {
+        fileId = url;
+      }
+      return fileId;
+    }
+    
+    // Fetch metadata (name and mimeType) and file content from Drive.
+    async function fetchFileWithMetadata(fileId) {
+      if (!accessToken) {
+        throw new Error('No access token available.');
+      }
+      // Fetch metadata.
+      const metadataUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,mimeType`;
+      const metadataResponse = await fetch(metadataUrl, {
+        headers: { 'Authorization': 'Bearer ' + accessToken },
+      });
+      if (!metadataResponse.ok) {
+        throw new Error(`Error fetching metadata for file ${fileId}: ${metadataResponse.statusText}`);
+      }
+      const metadata = await metadataResponse.json();
+      
+      // Fetch file content.
+      const contentUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      const contentResponse = await fetch(contentUrl, {
+        headers: { 'Authorization': 'Bearer ' + accessToken },
+      });
+      if (!contentResponse.ok) {
+        throw new Error(`Error downloading file ${fileId}: ${contentResponse.statusText}`);
+      }
+      const blob = await contentResponse.blob();
+      
+      return { fileId, blob, name: metadata.name, mimeType: metadata.mimeType };
+    }
+    
+    // Old method: Download each file individually.
+    async function downloadFileIndividually(fileId) {
+      try {
+        const contentUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+        const response = await fetch(contentUrl, {
+          headers: { 'Authorization': 'Bearer ' + accessToken },
+        });
+        if (!response.ok) {
+          throw new Error(`Error downloading file ${fileId}: ${response.statusText}`);
+        }
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = 'download_' + fileId;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(downloadUrl);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    
+    function downloadFilesIndividually() {
+      const input = document.getElementById('linksInput').value;
+      const lines = input.split('\n').map(l => l.trim()).filter(l => l);
+      lines.forEach(link => {
+        const fileId = extractFileId(link);
+        if (fileId) {
+          downloadFileIndividually(fileId);
+        } else {
+          console.error('Could not extract file ID from:', link);
+        }
+      });
+    }
+    
+    // New method: Download all files, fetch metadata to preserve names/extensions, and zip them.
+    async function downloadFilesAsZip() {
+      const input = document.getElementById('linksInput').value;
+      const lines = input.split('\n').map(l => l.trim()).filter(l => l);
+      
+      const filePromises = lines.map(link => {
+        const fileId = extractFileId(link);
+        if (fileId) {
+          return fetchFileWithMetadata(fileId).catch(error => {
+            console.error(error);
+            return null;
+          });
+        } else {
+          console.error('Could not extract file ID from:', link);
+          return Promise.resolve(null);
+        }
+      });
+      
+      const files = await Promise.all(filePromises);
+      const successfulFiles = files.filter(file => file !== null);
+      if (successfulFiles.length === 0) {
+        console.error('No files were successfully downloaded.');
+        return;
+      }
+      
+      const zip = new JSZip();
+      successfulFiles.forEach((file, idx) => {
+        const filename = file.name || `download_${idx}_${file.fileId}.bin`;
+        zip.file(filename, file.blob);
+      });
+      
+      zip.generateAsync({ type: "blob" })
+        .then(content => {
+          const downloadUrl = URL.createObjectURL(content);
+          const a = document.createElement('a');
+          a.href = downloadUrl;
+          a.download = 'downloads.zip';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(downloadUrl);
+        })
+        .catch(err => {
+          console.error('Error generating ZIP:', err);
+        });
+    }
+    
+    // Start the chosen download method.
+    function startDownload() {
+      const mode = document.querySelector('input[name="downloadMode"]:checked').value;
+      if (mode === 'zip') {
+        downloadFilesAsZip();
+      } else {
+        downloadFilesIndividually();
+      }
+    }
+    
+    window.onload = function() {
+      initTokenClient();
+      checkStoredToken();
+    }
+  </script>
+</head>
+<body class="bg-gray-100">
+  <div class="container mx-auto p-6 max-w-2xl shadow-lg bg-white rounded-lg mt-10">
+    <h1 class="text-3xl font-bold text-center mb-6">Download Multiple Google Drive Files</h1>
+    <div class="mb-4 text-center">
+      <button onclick="requestAccessToken()" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded">
+        Sign In &amp; Get Token
+      </button>
+      <p id="tokenStatus" class="mt-2 text-sm"></p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-gray-700 font-medium mb-2">
+        Paste one or more Google Drive links or file IDs (one per line):
+      </label>
+      <textarea id="linksInput" rows="6" class="w-full p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://drive.google.com/file/d/FILE_ID/view"></textarea>
+    </div>
+    <div class="mb-4">
+      <p class="font-medium text-gray-700 mb-2">Select Download Mode:</p>
+      <label class="inline-flex items-center mr-4">
+        <input type="radio" name="downloadMode" value="individual" checked class="form-radio text-blue-500">
+        <span class="ml-2">Individual Downloads (multiple prompts)</span>
+      </label>
+      <label class="inline-flex items-center">
+        <input type="radio" name="downloadMode" value="zip" class="form-radio text-blue-500">
+        <span class="ml-2">Download as ZIP (single prompt)</span>
+      </label>
+    </div>
+    <div class="text-center">
+      <button onclick="startDownload()" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-6 rounded">
+        Download Files
+      </button>
+    </div>
+  </div>
+</body>
+</html>
