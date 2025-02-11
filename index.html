@@ -170,9 +170,10 @@
       progressMessage.textContent = 'Downloading files...';
       progressBar.style.width = '0%';
       
-      // Download files one by one to update progress.
+      // Phase 1: Downloading files (weighted 50% of total progress)
       let downloadedFiles = [];
-      for (let i = 0; i < lines.length; i++) {
+      let totalFiles = lines.length;
+      for (let i = 0; i < totalFiles; i++) {
         const fileId = extractFileId(lines[i]);
         if (fileId) {
           try {
@@ -184,7 +185,10 @@
         } else {
           console.error('Could not extract file ID from:', lines[i]);
         }
-        progressMessage.textContent = `Downloaded ${i + 1} of ${lines.length} files...`;
+        // Update download progress (50% weight)
+        let downloadProgress = ((i + 1) / totalFiles) * 50;
+        progressMessage.textContent = `Downloading files: ${i + 1} of ${totalFiles} completed...`;
+        progressBar.style.width = downloadProgress + '%';
       }
       
       if (downloadedFiles.length === 0) {
@@ -192,7 +196,7 @@
         return;
       }
       
-      // Begin zipping and update progress via JSZip's onUpdate callback.
+      // Phase 2: Zipping files (remaining 50% of total progress)
       progressMessage.textContent = 'Zipping files...';
       const zip = new JSZip();
       downloadedFiles.forEach((file, idx) => {
@@ -201,9 +205,11 @@
       });
       
       zip.generateAsync({ type: "blob" }, (metadata) => {
-        const percent = Math.floor(metadata.percent);
-        progressMessage.textContent = `Zipping files: ${percent}%`;
-        progressBar.style.width = percent + '%';
+        // metadata.percent ranges from 0 to 100 during the zipping process.
+        // Weight it for the remaining 50% (i.e. overall progress = 50% + (zipPercent/2)).
+        let overallProgress = 50 + (metadata.percent * 0.5);
+        progressMessage.textContent = `Zipping files: ${Math.floor(overallProgress)}% complete`;
+        progressBar.style.width = overallProgress + '%';
       })
       .then(content => {
         const downloadUrl = URL.createObjectURL(content);
