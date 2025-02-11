@@ -162,46 +162,67 @@
       const input = document.getElementById('linksInput').value;
       const lines = input.split('\n').map(l => l.trim()).filter(l => l);
       
-      const filePromises = lines.map(link => {
-        const fileId = extractFileId(link);
-        if (fileId) {
-          return fetchFileWithMetadata(fileId).catch(error => {
-            console.error(error);
-            return null;
-          });
-        } else {
-          console.error('Could not extract file ID from:', link);
-          return Promise.resolve(null);
-        }
-      });
+      // Show progress container
+      const progressContainer = document.getElementById('progressContainer');
+      const progressMessage = document.getElementById('progressMessage');
+      const progressBar = document.getElementById('progressBar');
+      progressContainer.classList.remove('hidden');
+      progressMessage.textContent = 'Downloading files...';
+      progressBar.style.width = '0%';
       
-      const files = await Promise.all(filePromises);
-      const successfulFiles = files.filter(file => file !== null);
-      if (successfulFiles.length === 0) {
-        console.error('No files were successfully downloaded.');
+      // Download files one by one to update progress.
+      let downloadedFiles = [];
+      for (let i = 0; i < lines.length; i++) {
+        const fileId = extractFileId(lines[i]);
+        if (fileId) {
+          try {
+            const file = await fetchFileWithMetadata(fileId);
+            downloadedFiles.push(file);
+          } catch (error) {
+            console.error(error);
+          }
+        } else {
+          console.error('Could not extract file ID from:', lines[i]);
+        }
+        progressMessage.textContent = `Downloaded ${i + 1} of ${lines.length} files...`;
+      }
+      
+      if (downloadedFiles.length === 0) {
+        progressMessage.textContent = 'No files were successfully downloaded.';
         return;
       }
       
+      // Begin zipping and update progress via JSZip's onUpdate callback.
+      progressMessage.textContent = 'Zipping files...';
       const zip = new JSZip();
-      successfulFiles.forEach((file, idx) => {
+      downloadedFiles.forEach((file, idx) => {
         const filename = file.name || `download_${idx}_${file.fileId}.bin`;
         zip.file(filename, file.blob);
       });
       
-      zip.generateAsync({ type: "blob" })
-        .then(content => {
-          const downloadUrl = URL.createObjectURL(content);
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = 'downloads.zip';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(downloadUrl);
-        })
-        .catch(err => {
-          console.error('Error generating ZIP:', err);
-        });
+      zip.generateAsync({ type: "blob" }, (metadata) => {
+        const percent = Math.floor(metadata.percent);
+        progressMessage.textContent = `Zipping files: ${percent}%`;
+        progressBar.style.width = percent + '%';
+      })
+      .then(content => {
+        const downloadUrl = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = 'downloads.zip';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(downloadUrl);
+        progressMessage.textContent = 'Done!';
+        setTimeout(() => {
+          progressContainer.classList.add('hidden');
+        }, 1500);
+      })
+      .catch(err => {
+        console.error('Error generating ZIP:', err);
+        progressMessage.textContent = 'Error generating ZIP.';
+      });
     }
     
     // Start the chosen download method.
@@ -245,6 +266,13 @@
         <input type="radio" name="downloadMode" value="zip" class="form-radio text-blue-500">
         <span class="ml-2">Download as ZIP (single prompt)</span>
       </label>
+    </div>
+    <!-- Progress tracking section (hidden by default) -->
+    <div id="progressContainer" class="hidden mb-4">
+      <p id="progressMessage" class="text-gray-700 mb-2"></p>
+      <div class="w-full bg-gray-200 rounded-full h-2.5">
+        <div id="progressBar" class="bg-blue-500 h-2.5 rounded-full" style="width: 0%"></div>
+      </div>
     </div>
     <div class="text-center">
       <button onclick="startDownload()" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-6 rounded">
